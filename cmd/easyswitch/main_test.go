@@ -159,6 +159,14 @@ func TestUsage(t *testing.T) {
 	}
 }
 
+// The usage shows --idle= for no idle test: Windows PowerShell drops an
+// empty "" argument, so --idle "" would arrive without its value.
+func TestUsageSkipsIdleWithEquals(t *testing.T) {
+	if !strings.Contains(usageText, "--idle= for none") || strings.Contains(usageText, `""`) {
+		t.Errorf("usage does not show --idle= as the way to skip the idle test:\n%s", usageText)
+	}
+}
+
 func TestVersion(t *testing.T) {
 	code, stdout, _ := runCmd(testDeps(t, nil, "windows"), "version")
 	if code != 0 || stdout != "easyswitch dev\n" {
@@ -178,6 +186,7 @@ func TestDiagOptions(t *testing.T) {
 		{nil, nil, 2 * time.Minute, ""},
 		{[]string{"--quick"}, []time.Duration{}, 0, ""},
 		{[]string{"--idle", ""}, []time.Duration{}, 2 * time.Minute, ""},
+		{[]string{"--idle="}, []time.Duration{}, 2 * time.Minute, ""}, // the form the usage shows
 		{[]string{"--idle", "10s,1m"}, []time.Duration{10 * time.Second, time.Minute}, 2 * time.Minute, ""},
 		{[]string{"--watch", "30s", "--out", "r.txt"}, nil, 30 * time.Second, "r.txt"},
 		{[]string{"--quick", "--watch", "2m", "--idle", "1m"}, []time.Duration{}, 0, ""},

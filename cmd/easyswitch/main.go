@@ -34,7 +34,7 @@ const usageText = `usage:
   easyswitch version
 
 diag     measures how the receiver and its devices behave and writes a report
-         --idle   idle times before each ping, comma-separated; "" for none
+         --idle   idle times before each ping, comma-separated; --idle= for none
          --watch  how long to record what the receiver sends; 0 for none
          --quick  no idle test, no watch
          --out    report file (default: easyswitch-diag-<date>-<time>.txt here)
@@ -146,7 +146,7 @@ type diagConfig struct {
 }
 
 // parseDiag reads diag's flags. Idle stays nil for the default durations;
-// --quick and --idle "" make it empty, which skips the idle test.
+// --quick and --idle= make it empty, which skips the idle test.
 func parseDiag(args []string, stderr io.Writer) (diagConfig, error) {
 	var c diagConfig
 	fs := flag.NewFlagSet("diag", flag.ContinueOnError)

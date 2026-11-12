@@ -28,7 +28,7 @@ The steps, in order:
 1. Download the program.
 2. Quick check: `diag --quick`, under a minute.
 3. Full measurement: `diag`, about 40 minutes.
-4. Channel switch recording: `diag --watch 2m --idle ""`, about 3 minutes.
+4. Channel switch recording: `diag --watch 2m --idle=`, about 3 minutes.
 5. Boot diag: one restart and one minute at the login screen.
 6. Try `switch N`.
 7. Send the reports back.
@@ -41,10 +41,15 @@ and ends with "interrupted".
 The programs are not signed with a paid Apple or Microsoft developer
 certificate. What that means for you:
 
-- If you download with the PowerShell or Terminal commands below, the program
-  normally runs without a warning.
+- Downloading with the PowerShell or Terminal commands below is the way
+  least likely to bring up a warning.
 - If you download it with a web browser instead, expect Windows SmartScreen
   or macOS Gatekeeper to block it until you allow it (see below for how).
+- Windows security features such as Smart App Control or Microsoft Defender
+  may still warn about or block an unsigned program, however it was
+  downloaded. If a warning appears, the steps below say what to do; if
+  Windows gives you no way to allow the program, stop there and tell whoever
+  asked you to measure.
 
 #### Windows
 
@@ -150,7 +155,9 @@ macOS:
 
 What to do, step by step (the program tells you each step and counts down):
 
-1. "Move the mouse and press a key on the keyboard now": do that once.
+1. "Receiver 1 of 1: move the mouse and press a key on the keyboard now, so
+   the devices are awake." (the numbers differ if more than one receiver is
+   plugged in): do that once.
 2. "Do not touch the mouse or the keyboard for ...": **leave both devices
    completely alone** until the program asks for them again. This is the
    important part: a single touch spoils the measurement.
@@ -173,13 +180,13 @@ everything the receiver sends while you switch channels by hand.
 Windows:
 
 ```powershell
-& "$env:USERPROFILE\easyswitch.exe" diag --watch 2m --idle ""
+& "$env:USERPROFILE\easyswitch.exe" diag --watch 2m --idle=
 ```
 
 macOS:
 
 ```sh
-./easyswitch diag --watch 2m --idle ""
+./easyswitch diag --watch 2m --idle=
 ```
 
 What to do: move the mouse and press a key when asked. When it says "Press a
@@ -227,7 +234,7 @@ not administrator, PowerShell or Terminal is fine).
 Windows:
 
 ```powershell
-& "$env:USERPROFILE\easyswitch.exe" diag --boot-report > "$env:USERPROFILE\easyswitch-boot-report.txt"
+& "$env:USERPROFILE\easyswitch.exe" diag --boot-report | Out-File -Encoding utf8 "$env:USERPROFILE\easyswitch-boot-report.txt"
 ```
 
 macOS:
@@ -299,7 +306,7 @@ From each computer:
 
 - the report of `diag --quick`,
 - the report of `diag`,
-- the report of `diag --watch 2m --idle ""`,
+- the report of `diag --watch 2m --idle=`,
 - `easyswitch-boot-report.txt`,
 - the lines `switch` printed (copy them from the window),
 - which computer it was (Windows or Mac, and which channel it uses), and

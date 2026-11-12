@@ -41,7 +41,9 @@ func waitSent(t *testing.T, r *hidtest.Receiver, n int) []byte {
 }
 
 func TestRequestReply(t *testing.T) {
-	_, c := newFake(awakeSlot())
+	s := awakeSlot()
+	s.Delay = 5 * time.Millisecond // a coarse clock can measure a zero delay as 0
+	_, c := newFake(s)
 	defer c.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -295,5 +297,63 @@ func TestSubscriberClosedWhenReaderEnds(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("subscription not closed after the reader ended")
+	}
+}
+
+// raceDevice delivers each reply before Write returns, then runs after so
+// a test can end the request while the reply is already waiting for it.
+type raceDevice struct {
+	*hidtest.Receiver
+	conn   *hidpp.Conn
+	frames <-chan hidpp.Frame
+	after  func()
+}
+
+func (d *raceDevice) Write(report []byte) error {
+	if err := d.Receiver.Write(report); err != nil {
+		return err
+	}
+	<-d.frames   // the reader has the reply
+	d.conn.Err() // and has released its lock, so the reply is handed over
+	d.after()
+	return nil
+}
+
+func TestReplyWinsOverEndedRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		end  func(r *hidtest.Receiver, c *hidpp.Conn, cancel context.CancelFunc)
+	}{
+		{"context canceled", func(_ *hidtest.Receiver, _ *hidpp.Conn, cancel context.CancelFunc) { cancel() }},
+		{"reader ended", func(r *hidtest.Receiver, c *hidpp.Conn, _ context.CancelFunc) {
+			r.Unplug()
+			for c.Err() == nil {
+				time.Sleep(time.Millisecond)
+			}
+			time.Sleep(5 * time.Millisecond) // let the reader finish closing
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Without the reply taking precedence, select picks a side at random.
+			for i := 0; i < 50; i++ {
+				r := hidtest.NewReceiver(map[byte]*hidtest.Slot{2: awakeSlot()})
+				d := &raceDevice{Receiver: r}
+				c := hidpp.NewConn(d)
+				frames, unsubscribe := c.Subscribe()
+				ctx, cancel := context.WithCancel(context.Background())
+				d.conn, d.frames = c, frames
+				d.after = func() { tc.end(r, c, cancel) }
+				rep, err := c.Request(ctx, 2, 0x00, 0, []byte{0x18, 0x14})
+				cancel()
+				unsubscribe()
+				c.Close()
+				if err != nil {
+					t.Fatalf("run %d: err = %v, want the reply that had arrived", i, err)
+				}
+				if rep.Data[4] != changeHostIdx {
+					t.Fatalf("run %d: reply % x", i, rep.Data)
+				}
+			}
+		})
 	}
 }

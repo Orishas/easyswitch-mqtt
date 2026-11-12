@@ -176,18 +176,28 @@ func (c *Conn) Request(ctx context.Context, devIdx, featIdx, fn byte, params []b
 	if err := c.write(frame); err != nil {
 		return Reply{}, err
 	}
-	select {
-	case f := <-p.reply:
+	result := func(f Frame) (Reply, error) {
 		latency := f.At.Sub(start)
 		if Classify(f.Data, devIdx, featIdx, fn, swID) == Error {
 			code, hidpp1 := ErrorCode(f.Data)
 			return Reply{}, &DeviceError{Code: code, HIDPP1: hidpp1, Latency: latency}
 		}
 		return Reply{Data: f.Data, Latency: latency}, nil
+	}
+	var end error
+	select {
+	case f := <-p.reply:
+		return result(f)
 	case <-ctx.Done():
-		return Reply{}, ctxErr(ctx)
+		end = ctxErr(ctx)
 	case <-c.readerDone:
-		return Reply{}, c.Err()
+		end = c.Err()
+	}
+	select { // a reply that already arrived wins
+	case f := <-p.reply:
+		return result(f)
+	default:
+		return Reply{}, end
 	}
 }
 

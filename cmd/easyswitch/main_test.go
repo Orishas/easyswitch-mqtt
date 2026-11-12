@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Orishas/easyswitch-mqtt/internal/bootdiag"
 	"github.com/Orishas/easyswitch-mqtt/internal/diag"
 	"github.com/Orishas/easyswitch-mqtt/internal/hid"
 	"github.com/Orishas/easyswitch-mqtt/internal/hidpp"
@@ -310,4 +312,77 @@ func TestSwitchResults(t *testing.T) {
 func lastLine(s string) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
 	return lines[len(lines)-1]
+}
+
+// fakeBoot records which boot diag action ran and fails each with err.
+type fakeBoot struct {
+	called string
+	err    error
+}
+
+func (f *fakeBoot) deps(t *testing.T, goos string) deps {
+	d := testDeps(t, listing(hid.ErrUnsupported), goos)
+	d.boot = bootDiag{
+		install:   func() error { f.called += "install;"; return f.err },
+		uninstall: func() error { f.called += "uninstall;"; return f.err },
+		run:       func(context.Context) error { f.called += "run;"; return f.err },
+		report: func(w io.Writer) error {
+			f.called += "report;"
+			if f.err == nil {
+				io.WriteString(w, "== boot-run 1 at x, before login ==\n")
+			}
+			return f.err
+		},
+	}
+	return d
+}
+
+func TestBootDiag(t *testing.T) {
+	const installed = "Installed. Restart the computer, wait one minute at the login screen while moving the mouse and pressing Shift on the keyboard, then log in and run: easyswitch diag --boot-report\nDo not move or delete this program until then.\n"
+	for _, tc := range []struct {
+		goos, flag string
+		err        error
+		called     string
+		code       int
+		stdout     string
+		stderr     string
+	}{
+		{"windows", "--boot-install", nil, "install;", 0, installed, ""},
+		{"darwin", "-boot-install", nil, "install;", 0, installed, ""},
+		{"windows", "--boot-install", bootdiag.ErrNotAdmin, "install;", 1, "", `Run this in a PowerShell window opened with "Run as administrator".` + "\n"},
+		{"darwin", "--boot-install", bootdiag.ErrNotAdmin, "install;", 1, "", "Run this with sudo.\n"},
+		{"darwin", "--boot-install", errors.New("launchd is gone"), "install;", 1, "", "launchd is gone\n"},
+		{"linux", "--boot-install", hid.ErrUnsupported, "install;", 1, "", msgNoPlatform + "\n"},
+		{"windows", "--boot-run", nil, "run;", 0, "", ""},
+		{"linux", "--boot-run", hid.ErrUnsupported, "run;", 1, "", msgNoPlatform + "\n"},
+		{"darwin", "--boot-report", nil, "report;", 0, "== boot-run 1 at x, before login ==\n", ""},
+		{"windows", "--boot-report", bootdiag.ErrNoReport, "report;", 1, "", "No boot report yet. Did the computer restart after --boot-install?\n"},
+		{"linux", "--boot-report", hid.ErrUnsupported, "report;", 1, "", msgNoPlatform + "\n"},
+		{"windows", "--boot-remove", nil, "uninstall;", 0, "Removed.\n", ""},
+		{"darwin", "--boot-remove", bootdiag.ErrNotInstalled, "uninstall;", 0, "Nothing to remove.\n", ""},
+		{"darwin", "--boot-remove", bootdiag.ErrNotAdmin, "uninstall;", 1, "", "Run this with sudo.\n"},
+		{"windows", "--boot-remove", bootdiag.ErrNotAdmin, "uninstall;", 1, "", `Run this in a PowerShell window opened with "Run as administrator".` + "\n"},
+		{"linux", "--boot-remove", hid.ErrUnsupported, "uninstall;", 1, "", msgNoPlatform + "\n"},
+	} {
+		f := &fakeBoot{err: tc.err}
+		code, stdout, stderr := runCmd(f.deps(t, tc.goos), "diag", tc.flag)
+		if code != tc.code || stdout != tc.stdout || stderr != tc.stderr || f.called != tc.called {
+			t.Errorf("%s diag %s with %v: exit %d, stdout %q, stderr %q, called %q; want %d, %q, %q, %q",
+				tc.goos, tc.flag, tc.err, code, stdout, stderr, f.called, tc.code, tc.stdout, tc.stderr, tc.called)
+		}
+	}
+}
+
+func TestBootDiagFlagsStandAlone(t *testing.T) {
+	for _, args := range [][]string{
+		{"diag", "--boot-install", "--quick"},
+		{"diag", "--quick", "--boot-report"},
+		{"diag", "--boot-report", "--boot-remove"},
+	} {
+		f := &fakeBoot{}
+		code, _, stderr := runCmd(f.deps(t, "windows"), args...)
+		if code != 2 || !strings.Contains(stderr, "usage:") || f.called != "" {
+			t.Errorf("%q: exit %d, stderr %q, called %q; want usage and nothing run", args, code, stderr, f.called)
+		}
+	}
 }

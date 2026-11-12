@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Orishas/easyswitch-mqtt/internal/bootdiag"
 	"github.com/Orishas/easyswitch-mqtt/internal/diag"
 	"github.com/Orishas/easyswitch-mqtt/internal/hid"
 	"github.com/Orishas/easyswitch-mqtt/internal/hidpp"
@@ -28,6 +29,7 @@ var version = "dev"
 
 const usageText = `usage:
   easyswitch diag [--idle 10s,1m,5m,30m] [--watch 2m] [--quick] [--out FILE]
+  easyswitch diag --boot-install | --boot-report | --boot-remove
   easyswitch switch N
   easyswitch version
 
@@ -36,6 +38,10 @@ diag     measures how the receiver and its devices behave and writes a report
          --watch  how long to record what the receiver sends; 0 for none
          --quick  no idle test, no watch
          --out    report file (default: easyswitch-diag-<date>-<time>.txt here)
+         --boot-install  measures again at the next start of the computer, before
+                         login, as a system service (needs administrator rights)
+         --boot-report   prints what that service measured
+         --boot-remove   removes the service and its report
 switch   moves every device to channel N (1, 2 or 3)
 version  prints the version
 `
@@ -69,14 +75,39 @@ type deps struct {
 	goos          string // for the wording of an access denial
 	now           func() time.Time
 	switchDevices func(ctx context.Context, conn *hidpp.Conn, channel int, patience time.Duration) ([]switcher.Result, error)
+	boot          bootDiag
 }
 
+// bootDiag is the system service that runs diag before login, see
+// package bootdiag.
+type bootDiag struct {
+	install, uninstall func() error
+	run                func(context.Context) error
+	report             func(io.Writer) error
+}
+
+// The boot diag's messages.
+const (
+	msgBootInstalled   = "Installed. Restart the computer, wait one minute at the login screen while moving the mouse and pressing Shift on the keyboard, then log in and run: easyswitch diag --boot-report\nDo not move or delete this program until then."
+	msgBootRemoved     = "Removed."
+	msgNothingToRemove = "Nothing to remove."
+	msgAdminWindows    = `Run this in a PowerShell window opened with "Run as administrator".`
+	msgAdminElsewhere  = "Run this with sudo."
+)
+
 func main() {
+	bootdiag.Version = version
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, deps{
 		open:          diag.SystemOpener(),
 		goos:          runtime.GOOS,
 		now:           time.Now,
 		switchDevices: switcher.Switch,
+		boot: bootDiag{
+			install:   bootdiag.Install,
+			uninstall: bootdiag.Uninstall,
+			run:       bootdiag.Run,
+			report:    bootdiag.Report,
+		},
 	}))
 }
 
@@ -162,6 +193,11 @@ func parseDurations(v string) ([]time.Duration, error) {
 }
 
 func runDiag(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) int {
+	if len(args) == 1 {
+		if code, ok := runBoot(ctx, args[0], stdout, stderr, d); ok {
+			return code
+		}
+	}
 	c, err := parseDiag(args, stderr)
 	if err != nil {
 		return usage(stderr)
@@ -193,6 +229,44 @@ func runDiag(ctx context.Context, args []string, stdout, stderr io.Writer, d dep
 	}
 	fmt.Fprintln(stdout, path)
 	return code
+}
+
+// runBoot runs the boot diag flag arg, which must stand alone. ok is false
+// when arg is no such flag.
+func runBoot(ctx context.Context, arg string, stdout, stderr io.Writer, d deps) (code int, ok bool) {
+	var err error
+	switch strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-") {
+	case "boot-install":
+		if err = d.boot.install(); err == nil {
+			fmt.Fprintln(stdout, msgBootInstalled)
+		}
+	case "boot-run":
+		err = d.boot.run(ctx)
+	case "boot-report":
+		err = d.boot.report(stdout)
+	case "boot-remove":
+		err = d.boot.uninstall()
+		switch {
+		case err == nil:
+			fmt.Fprintln(stdout, msgBootRemoved)
+		case errors.Is(err, bootdiag.ErrNotInstalled):
+			fmt.Fprintln(stdout, msgNothingToRemove)
+			return exitOK, true
+		}
+	default:
+		return 0, false
+	}
+	switch {
+	case err == nil:
+		return exitOK, true
+	case errors.Is(err, bootdiag.ErrNotAdmin) && d.goos == "windows":
+		fmt.Fprintln(stderr, msgAdminWindows)
+	case errors.Is(err, bootdiag.ErrNotAdmin):
+		fmt.Fprintln(stderr, msgAdminElsewhere)
+	default:
+		fmt.Fprintln(stderr, explain(err, d.goos))
+	}
+	return exitFail, true
 }
 
 func runSwitch(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) int {

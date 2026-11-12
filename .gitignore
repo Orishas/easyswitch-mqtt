@@ -1,0 +1,5 @@
+.superpowers/
+/easyswitch
+/easyswitch.exe
+*.test
+easyswitch-diag-*.txt

@@ -218,6 +218,12 @@ func (d *darwinDevice) Write(report []byte) error {
 
 // Close waits for a pending Write, stops the run loop and waits until its
 // thread has closed the devices and released the manager.
+//
+// d.session is alive when esw_stop reads it: Open returned d, so esw_open
+// succeeded; the run loop ends only through the stop source, which only
+// esw_stop signals (esw_run loops until then and cannot return on its own);
+// and closeOnce makes this the single esw_stop call, so a second Close never
+// touches the freed session.
 func (d *darwinDevice) Close() error {
 	d.closeOnce.Do(func() {
 		d.mu.Lock()

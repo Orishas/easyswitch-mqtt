@@ -114,6 +114,7 @@ func TestRequestCanceled(t *testing.T) {
 func TestRequestDeviceError(t *testing.T) {
 	s := awakeSlot()
 	s.Offline = true
+	s.Delay = 5 * time.Millisecond // a coarse clock can measure a zero delay as 0
 	_, c := newFake(s)
 	defer c.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

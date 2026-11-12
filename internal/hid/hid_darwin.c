@@ -256,15 +256,25 @@ int32_t esw_open(const uint64_t *ids, int n, uintptr_t ctx, esw_session **out) {
 
 void esw_run(esw_session *s) {
 	// The stop source keeps the loop from finishing early, so only
-	// stop_perform ends it; s stays valid until esw_stop has been called.
+	// stop_perform ends it: s stays valid until esw_stop has signalled.
 	while (!s->stopped)
 		CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1.0e10, false);
 	session_free(s);
 }
 
+// esw_stop ends esw_run. The caller guarantees that s is alive on entry
+// (esw_run cannot return before this call) and calls it at most once. Once
+// the source is signalled the run-loop thread may free s at any moment, so
+// everything needed afterwards is copied and retained first.
 void esw_stop(esw_session *s) {
-	CFRunLoopSourceSignal(s->stop_source);
-	CFRunLoopWakeUp(s->loop);
+	CFRunLoopRef loop = s->loop;
+	CFRunLoopSourceRef src = s->stop_source;
+	CFRetain(loop);
+	CFRetain(src);
+	CFRunLoopSourceSignal(src); // from here on, s may be freed
+	CFRunLoopWakeUp(loop);
+	CFRelease(src);
+	CFRelease(loop);
 }
 
 int32_t esw_set_report(esw_session *s, int index, uint8_t report_id, const uint8_t *data, long len) {

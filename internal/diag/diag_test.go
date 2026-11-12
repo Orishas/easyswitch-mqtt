@@ -104,6 +104,14 @@ func (c *clock) Now() time.Time {
 	return c.now
 }
 
+// advance moves the fake time on, for a hook that needs time to pass
+// before it acts.
+func (c *clock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
 func (c *clock) Sleep(ctx context.Context, d time.Duration) error {
 	if c.hook != nil {
 		c.hook(ctx, d)
@@ -195,6 +203,7 @@ func TestReportSlots(t *testing.T) {
 	if len(got) != 6 {
 		t.Fatalf("slots has %d slot lines, want 6:\n%s", len(got), strings.Join(got, "\n"))
 	}
+	mustContain(t, out.String(), `"timeout" means no answer within 50ms;`)
 	for i, want := range [][]string{
 		{"slot 1:", "Easy-Switch (0x1814) at feature index 0x0a", `name "MX Keys S"`, "3 channels", "current channel 1"},
 		{"slot 2:", "Easy-Switch (0x1814) at feature index 0x0e", `name "MX Master 4"`, "3 channels", "current channel 1"},
@@ -576,5 +585,106 @@ func TestSystemOpener(t *testing.T) {
 	err := diag.Run(context.Background(), diag.SystemOpener(), options(c, &out, &progress))
 	if !errors.Is(err, hid.ErrUnsupported) {
 		t.Fatalf("Run = %v, want hid.ErrUnsupported", err)
+	}
+}
+
+// pings returns the root ping frames written to devIdx, in order.
+func pings(r *hidtest.Receiver, devIdx byte) [][]byte {
+	var out [][]byte
+	for _, f := range r.Sent() {
+		if f[1] == devIdx && f[2] == 0x00 && f[3]>>4 == 1 {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// pingReply is the device's reply to ping request req.
+func pingReply(req []byte) []byte {
+	f := make([]byte, 20)
+	copy(f, []byte{0x11, req[1], 0x00, req[3], 0x04, 0x05, req[6]})
+	return f
+}
+
+// unreachable is the receiver's HID++ 1.0 error reply to request req.
+func unreachable(req []byte) []byte {
+	return []byte{0x10, req[1], 0x8F, req[2], req[3], 0x09, 0x00}
+}
+
+func TestLateReply(t *testing.T) {
+	dev := &syncDevice{Receiver: newBolt()}
+	var out, progress bytes.Buffer
+	c := newClock()
+	o := options(c, &out, &progress, 10*time.Second)
+	var injected [][]byte
+	c.hook = func(_ context.Context, d time.Duration) {
+		switch d {
+		case 10 * time.Second: // both fall asleep while nobody touches them
+			dev.Update(1, func(s *hidtest.Slot) { s.Awake = false })
+			dev.Update(2, func(s *hidtest.Slot) { s.Awake = false })
+		case 2 * o.Timeout: // listening for late answers: both answer the idle ping now
+			c.advance(1200 * time.Millisecond)
+			injected = [][]byte{pingReply(pings(dev.Receiver, 1)[0]), unreachable(pings(dev.Receiver, 2)[0])}
+			for _, f := range injected {
+				injectAndWait(t, dev, f)
+			}
+		}
+	}
+	if err := diag.Run(context.Background(), opener(bolt(dev)), o); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	text := out.String()
+	idle := strings.Join(block(t, text, "-- idle --"), "\n")
+	mustContain(t, idle, "after 10 s idle, slot 1 (MX Keys S): timeout")
+	mustContain(t, idle, "after 10 s idle, slot 2 (MX Master 4): timeout")
+	// the idle ping was written 5 s before the after-wake pings, 6.2 s before the answers
+	got := block(t, text, "-- late replies --")
+	want := []string{
+		"slot 1 (MX Keys S) idle ping after 10 s: reply after 6200.0 ms",
+		"slot 2 (MX Master 4) idle ping after 10 s: error 0x09 (hid++1) after 6200.0 ms",
+	}
+	if strings.Join(got[1:], "\n") != strings.Join(want, "\n") {
+		t.Errorf("late replies:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	unsolicited := strings.Join(block(t, text, "== unsolicited =="), "\n")
+	if len(injected) != 2 {
+		t.Fatal("never listened for late answers")
+	}
+	for _, f := range injected {
+		if strings.Contains(unsolicited, hexs(f)) {
+			t.Errorf("late reply %s listed as unsolicited", hexs(f))
+		}
+	}
+	mustContain(t, progress.String(), "Listening 100ms for late answers.")
+}
+
+func TestUnansweredRequestDoesNotClaimLaterFrame(t *testing.T) {
+	dev := &syncDevice{Receiver: newBolt()}
+	var out, progress bytes.Buffer
+	c := newClock()
+	o := options(c, &out, &progress, 10*time.Second)
+	o.Watch = time.Minute
+	var foreign []byte
+	c.hook = func(_ context.Context, d time.Duration) {
+		switch d {
+		case 10 * time.Second:
+			dev.Update(1, func(s *hidtest.Slot) { s.Awake = false })
+		case 20 * time.Second: // in the watch, long after listening for late answers
+			// the same header as diag's unanswered after-wake ping, e.g. another program's ping
+			foreign = pingReply(pings(dev.Receiver, 1)[1])
+			injectAndWait(t, dev, foreign)
+		}
+	}
+	if err := diag.Run(context.Background(), opener(bolt(dev)), o); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	text := out.String()
+	if foreign == nil {
+		t.Fatal("watch never ran")
+	}
+	mustContain(t, strings.Join(block(t, text, "== unsolicited =="), "\n"), hexs(foreign))
+	mustContain(t, strings.Join(block(t, text, "-- watch --"), "\n"), hexs(foreign))
+	if got := block(t, text, "-- late replies --"); got[len(got)-1] != "none" {
+		t.Errorf("late replies:\n%s", strings.Join(got, "\n"))
 	}
 }

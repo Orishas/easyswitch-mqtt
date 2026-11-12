@@ -88,15 +88,20 @@ func outcome(err error) string {
 	var de *hidpp.DeviceError
 	switch {
 	case errors.As(err, &de):
-		v := "hid++2"
-		if de.HIDPP1 {
-			v = "hid++1"
-		}
-		return fmt.Sprintf("error 0x%02x (%s) after %s", de.Code, v, ms(de.Latency))
+		return errorName(de.Code, de.HIDPP1) + " after " + ms(de.Latency)
 	case errors.Is(err, hidpp.ErrTimeout):
 		return "timeout"
 	}
 	return "failed: " + err.Error()
+}
+
+// errorName formats an error reply's code: "error 0x09 (hid++1)".
+func errorName(code byte, hidpp1 bool) string {
+	v := "hid++2"
+	if hidpp1 {
+		v = "hid++1"
+	}
+	return fmt.Sprintf("error 0x%02x (%s)", code, v)
 }
 
 // yesNo formats a bool for the person reading the report.

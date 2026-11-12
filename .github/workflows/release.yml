@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+      GOOS: windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build amd64
+        run: go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o easyswitch-windows-amd64.exe ./cmd/easyswitch
+        env:
+          GOARCH: amd64
+      - name: Build arm64
+        run: go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o easyswitch-windows-arm64.exe ./cmd/easyswitch
+        env:
+          GOARCH: arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            easyswitch-windows-amd64.exe
+            easyswitch-windows-arm64.exe
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-latest
+    env:
+      CGO_ENABLED: "1"
+      GOOS: darwin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build arm64
+        run: go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o easyswitch-arm64 ./cmd/easyswitch
+        env:
+          GOARCH: arm64
+      - name: Build amd64
+        run: go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o easyswitch-amd64 ./cmd/easyswitch
+        env:
+          GOARCH: amd64
+      - name: Make the universal binary
+        run: lipo -create -output easyswitch-macos easyswitch-arm64 easyswitch-amd64
+      # --force: the linker already signs the arm64 half; codesign refuses
+      # to sign a signed file again without it.
+      - name: Sign ad hoc
+        run: |
+          codesign --force -s - easyswitch-macos
+          codesign --verify easyswitch-macos
+          lipo -info easyswitch-macos
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: easyswitch-macos
+          if-no-files-found: error
+
+  release:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum easyswitch-windows-amd64.exe easyswitch-windows-arm64.exe easyswitch-macos > SHA256SUMS
+      - name: Create the release
+        working-directory: dist
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes easyswitch-windows-amd64.exe easyswitch-windows-arm64.exe easyswitch-macos SHA256SUMS

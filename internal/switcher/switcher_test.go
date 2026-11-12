@@ -18,13 +18,17 @@ const (
 	nameIdx          byte = 0x03
 )
 
-// fast shortens the waits so a test with absent slots stays well under a
+// testPatience is long enough for a few rounds over silent slots with the
+// timeouts fast sets.
+const testPatience = 300 * time.Millisecond
+
+// fast shortens the waits so a test with silent slots stays well under a
 // second.
 func fast(t *testing.T) {
 	t.Helper()
-	oldTimeout, oldPause := requestTimeout, roundPause
-	requestTimeout, roundPause = 30*time.Millisecond, 10*time.Millisecond
-	t.Cleanup(func() { requestTimeout, roundPause = oldTimeout, oldPause })
+	oldShort, oldLong, oldPause := shortTimeout, longTimeout, roundPause
+	shortTimeout, longTimeout, roundPause = 30*time.Millisecond, 500*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { shortTimeout, longTimeout, roundPause = oldShort, oldLong, oldPause })
 }
 
 // boltSlots are "MX Keys S" at slot 1 and "MX Master 4" at slot 2, both
@@ -73,7 +77,7 @@ func current(rx *hidtest.Receiver, devIdx byte) int {
 func TestSwitchBoth(t *testing.T) {
 	fast(t)
 	rx := hidtest.NewReceiver(boltSlots())
-	got, err := Switch(context.Background(), connect(t, rx), 2, time.Second)
+	got, err := Switch(context.Background(), connect(t, rx), 2, testPatience)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +99,7 @@ func TestSwitchAlready(t *testing.T) {
 	delete(slots, 2)
 	slots[1].Current = 1
 	rx := hidtest.NewReceiver(slots)
-	got, err := Switch(context.Background(), connect(t, rx), 2, time.Second)
+	got, err := Switch(context.Background(), connect(t, rx), 2, testPatience)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,19 +109,17 @@ func TestSwitchAlready(t *testing.T) {
 	}
 }
 
+// An idle device does not answer at all until it is touched.
 func TestSwitchLateWaker(t *testing.T) {
 	fast(t)
 	slots := boltSlots()
-	slots[2].Offline = true // asleep: the receiver answers for it
+	slots[2].Awake = false
 	rx := hidtest.NewReceiver(slots)
 	timer := time.AfterFunc(150*time.Millisecond, func() {
-		rx.Update(2, func(s *hidtest.Slot) { s.Offline = false })
+		rx.Update(2, func(s *hidtest.Slot) { s.Awake = true })
 	})
 	defer timer.Stop()
-
-	const patience = 2 * time.Second
-	start := time.Now()
-	got, err := Switch(context.Background(), connect(t, rx), 3, patience)
+	got, err := Switch(context.Background(), connect(t, rx), 3, 500*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,8 +127,69 @@ func TestSwitchLateWaker(t *testing.T) {
 		{Name: "MX Keys S", Slot: 1, From: 1, Outcome: "left"},
 		{Name: "MX Master 4", Slot: 2, From: 1, Outcome: "left"},
 	})
-	if took := time.Since(start); took >= patience {
-		t.Errorf("took %v: did not stop once every device was handled", took)
+}
+
+// A silent slot keeps Switch looking for the whole patience; the device
+// that answered is still reported.
+func TestSwitchNeverWakes(t *testing.T) {
+	fast(t)
+	slots := boltSlots()
+	slots[2].Awake = false
+	rx := hidtest.NewReceiver(slots)
+	start := time.Now()
+	got, err := Switch(context.Background(), connect(t, rx), 2, testPatience)
+	if took := time.Since(start); took < testPatience {
+		t.Errorf("gave up after %v, want the whole patience of %v", took, testPatience)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertResults(t, got, []Result{{Name: "MX Keys S", Slot: 1, From: 1, Outcome: "left"}})
+}
+
+// A device slower than the short timeout: its late reply shows it is
+// awake, so the next request waits the long timeout.
+func TestSwitchSlowDevice(t *testing.T) {
+	fast(t) // short 30 ms, long 500 ms
+	slots := boltSlots()
+	delete(slots, 2)
+	slots[1].Delay = 100 * time.Millisecond
+	rx := hidtest.NewReceiver(slots)
+	got, err := Switch(context.Background(), connect(t, rx), 2, testPatience)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertResults(t, got, []Result{{Name: "MX Keys S", Slot: 1, From: 1, Outcome: "left"}})
+}
+
+// With every slot settled Switch returns before the patience; patience 0
+// means the default, long enough for a device that wakes after 150 ms.
+func TestSwitchDefaultPatienceAndEarlyEnd(t *testing.T) {
+	fast(t)
+	slots := boltSlots()
+	slots[2].Awake = false
+	rx := hidtest.NewReceiver(slots)
+	timer := time.AfterFunc(150*time.Millisecond, func() {
+		rx.Update(2, func(s *hidtest.Slot) { s.Awake = true })
+	})
+	defer timer.Stop()
+	dev := &hooked{Receiver: rx, onWrite: func(f []byte) bool {
+		if f[1] >= 3 {
+			rx.Inject([]byte{0x10, f[1], 0x8F, f[2], f[3], 0x08, 0x00}) // unknown device
+			return false
+		}
+		return true
+	}}
+	start := time.Now()
+	got, err := Switch(context.Background(), connect(t, dev), 2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("took %v, want an end once every slot was settled", took)
+	}
+	if len(got) != 2 || got[0].Outcome != "left" || got[1].Outcome != "left" {
+		t.Errorf("results:\n%s\nwant two left", show(got))
 	}
 }
 
@@ -186,7 +249,7 @@ func TestSwitchChannelOutOfRange(t *testing.T) {
 	slots := boltSlots()
 	delete(slots, 2)
 	rx := hidtest.NewReceiver(slots)
-	got, err := Switch(context.Background(), connect(t, rx), 4, time.Second)
+	got, err := Switch(context.Background(), connect(t, rx), 4, testPatience)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +274,7 @@ func TestSwitchDeviceStays(t *testing.T) {
 		}
 		return true
 	}}
-	got, err := Switch(context.Background(), connect(t, dev), 2, time.Second)
+	got, err := Switch(context.Background(), connect(t, dev), 2, testPatience)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +316,7 @@ func TestSwitchNoName(t *testing.T) {
 	delete(slots, 2)
 	delete(slots[1].Features, hidpp.FeatDeviceName)
 	rx := hidtest.NewReceiver(slots)
-	got, err := Switch(context.Background(), connect(t, rx), 2, time.Second)
+	got, err := Switch(context.Background(), connect(t, rx), 2, testPatience)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,10 +328,24 @@ func TestSwitchCancel(t *testing.T) {
 	rx := hidtest.NewReceiver(nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	_, err := Switch(ctx, connect(t, rx), 2, 5*time.Second)
-	if err != context.DeadlineExceeded {
-		t.Errorf("err = %v, want context.DeadlineExceeded", err)
+	got, err := Switch(ctx, connect(t, rx), 2, 5*time.Second)
+	if err != context.DeadlineExceeded || len(got) != 0 {
+		t.Errorf("Switch = %+v, %v; want nothing, context.DeadlineExceeded", got, err)
 	}
+
+	t.Run("results so far", func(t *testing.T) {
+		slots := boltSlots()
+		slots[2].Awake = false
+		rx := hidtest.NewReceiver(slots)
+		ctx, cancel := context.WithCancel(context.Background())
+		timer := time.AfterFunc(150*time.Millisecond, cancel)
+		defer timer.Stop()
+		got, err := Switch(ctx, connect(t, rx), 2, 5*time.Second)
+		if err != context.Canceled {
+			t.Errorf("err = %v, want context.Canceled", err)
+		}
+		assertResults(t, got, []Result{{Name: "MX Keys S", Slot: 1, From: 1, Outcome: "left"}})
+	})
 }
 
 func assertResults(t *testing.T, got, want []Result) {

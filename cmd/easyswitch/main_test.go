@@ -274,6 +274,14 @@ func TestSwitchResults(t *testing.T) {
 			stdout: "MX Keys S: asleep\nMX Master 4: error: device has 3 channels\n",
 		},
 		{
+			name:    "interrupted",
+			results: []switcher.Result{{Name: "MX Keys S", Slot: 1, From: 1, Outcome: "left"}},
+			err:     context.Canceled,
+			code:    1,
+			stdout:  "MX Keys S: left (was on channel 1)\n",
+			stderr:  looking + "Interrupted.\n",
+		},
+		{
 			name:   "no device answered",
 			err:    errors.New("no device answered"),
 			code:   1,

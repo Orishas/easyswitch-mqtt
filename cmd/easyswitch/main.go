@@ -51,7 +51,7 @@ const (
 const maxChannel = 3
 
 // switchPatience is how long switch looks for devices that sleep.
-const switchPatience = 8 * time.Second
+const switchPatience = switcher.DefaultPatience
 
 // defaultWatch is how long diag records what the receiver sends; the idle
 // durations default inside diag.
@@ -237,14 +237,6 @@ func runSwitch(ctx context.Context, args []string, stdout, stderr io.Writer, d d
 		conn := hidpp.NewConn(dev)
 		results, err := d.switchDevices(ctx, conn, channel, switchPatience)
 		conn.Close()
-		if ctx.Err() != nil {
-			fmt.Fprintln(stderr, "Interrupted.")
-			return exitFail
-		}
-		if err != nil {
-			fmt.Fprintf(stderr, "%s: %v\n", rx.Product, err)
-			continue
-		}
 		for _, r := range results {
 			line := r.Name + ": " + r.Outcome
 			if r.Outcome == "left" {
@@ -252,6 +244,13 @@ func runSwitch(ctx context.Context, args []string, stdout, stderr io.Writer, d d
 			}
 			fmt.Fprintln(stdout, line)
 			switched = switched || r.Outcome == "left" || r.Outcome == "already"
+		}
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			fmt.Fprintln(stderr, "Interrupted.")
+			return exitFail
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "%s: %v\n", rx.Product, err)
 		}
 	}
 	if opened == 0 {

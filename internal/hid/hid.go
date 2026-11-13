@@ -118,6 +118,19 @@ func routeReport(ifaces []Info, reportID byte) (int, error) {
 	return 0, fmt.Errorf("hid: no interface takes report %#02x", reportID)
 }
 
+// withUnknownOutLen returns a copy of ifaces with every OutLen set to 0, the
+// routing input for macOS: there OutLen is the largest output report of the
+// whole interface, not the length of one report ID, and a write sends
+// exactly the bytes given, so it says nothing about which IDs an interface
+// takes.
+func withUnknownOutLen(ifaces []Info) []Info {
+	out := append([]Info(nil), ifaces...)
+	for i := range out {
+		out[i].OutLen = 0
+	}
+	return out
+}
+
 // withReportID makes an input report start with its report ID. IOKit is
 // inconsistent about whether its callback buffer includes the ID; HID++
 // reports never start with a byte equal to their own ID unless it is the

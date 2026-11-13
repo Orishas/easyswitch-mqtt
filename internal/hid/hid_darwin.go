@@ -85,7 +85,7 @@ func Enumerate() ([]Info, error) {
 
 // darwinDevice is an open receiver.
 type darwinDevice struct {
-	infos   []Info
+	infos   []Info // routing input: OutLen 0, see withUnknownOutLen
 	reports chan []byte
 	done    chan struct{} // closed by Close
 	exited  chan struct{} // closed when the run-loop thread has closed everything
@@ -115,7 +115,7 @@ func (r Receiver) Open() (Device, error) {
 		ids[i] = C.uint64_t(id)
 	}
 	d := &darwinDevice{
-		infos:   append([]Info(nil), r.Interfaces...),
+		infos:   withUnknownOutLen(r.Interfaces),
 		reports: make(chan []byte, 64),
 		done:    make(chan struct{}),
 		exited:  make(chan struct{}),

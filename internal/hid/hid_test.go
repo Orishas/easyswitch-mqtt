@@ -84,6 +84,25 @@ func TestRouteReport(t *testing.T) {
 	}
 }
 
+// On macOS a lone interface takes every report ID whatever its maximum
+// output size (here 32, as with a DJ long report), and the caller's Info
+// keeps its real OutLen.
+func TestWithUnknownOutLen(t *testing.T) {
+	in := []Info{{Path: "a", OutLen: 32}}
+	got := withUnknownOutLen(in)
+	if in[0].OutLen != 32 {
+		t.Errorf("input OutLen = %d, want 32 kept", in[0].OutLen)
+	}
+	if want := []Info{{Path: "a"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("withUnknownOutLen = %+v, want %+v", got, want)
+	}
+	for _, id := range []byte{0x10, 0x11} {
+		if i, err := routeReport(got, id); err != nil || i != 0 {
+			t.Errorf("routeReport(%#02x) = (%d, %v), want 0", id, i, err)
+		}
+	}
+}
+
 func TestWithReportID(t *testing.T) {
 	for _, c := range []struct {
 		id       uint32

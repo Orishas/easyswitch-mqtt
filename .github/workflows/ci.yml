@@ -12,6 +12,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # The minimum macOS version the release builds for (see release.yml);
+      # only Apple toolchains read it.
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

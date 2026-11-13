@@ -269,7 +269,10 @@ func (sw *switcher) readName(s *slot) (string, error) {
 	return name, err
 }
 
-// leave sends setCurrentHost until a ping says the device is gone.
+// leave sends setCurrentHost until a ping says the device is gone: the
+// ping times out, or the receiver answers for the slot with a HID++ 1.0
+// error. A HID++ 2.0 error comes from the device itself, so it is still
+// here, the same as a device that answers.
 func (sw *switcher) leave(s *slot) (string, error) {
 	for range attempts {
 		if err := sw.conn.SetHost(s.n, s.idx, sw.channel-1); err != nil {
@@ -282,8 +285,9 @@ func (sw *switcher) leave(s *slot) (string, error) {
 		switch {
 		case sw.ctx.Err() != nil:
 			return "", sw.ctx.Err()
-		case errors.As(err, &devErr), errors.Is(err, hidpp.ErrTimeout):
+		case errors.As(err, &devErr) && devErr.HIDPP1, errors.Is(err, hidpp.ErrTimeout):
 			return "left", nil
+		case errors.As(err, &devErr): // HID++ 2.0: the device answered
 		case err != nil:
 			return "error: " + err.Error(), nil
 		}

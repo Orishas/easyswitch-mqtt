@@ -59,6 +59,7 @@ func TestRouteReport(t *testing.T) {
 		{[]Info{{OutLen: 0}}, 0x10, 0},
 		{[]Info{{OutLen: 0}}, 0x11, 0},
 		{[]Info{{OutLen: 0}}, 0x12, 0},
+		{[]Info{{OutLen: 20}}, 0x11, 0},
 	} {
 		got, err := routeReport(c.ifaces, c.id)
 		if err != nil || got != c.want {
@@ -72,6 +73,9 @@ func TestRouteReport(t *testing.T) {
 		{both, 0x12},
 		{[]Info{{OutLen: 7}, {OutLen: 7}}, 0x11},
 		{nil, 0x11},
+		{[]Info{{OutLen: 20}}, 0x10}, // a lone long-report interface
+		{[]Info{{OutLen: 64}}, 0x10}, // a lone foreign vendor interface
+		{[]Info{{OutLen: 64}}, 0x11},
 	} {
 		_, err := routeReport(c.ifaces, c.id)
 		if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%#02x", c.id)) {

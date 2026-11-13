@@ -100,17 +100,19 @@ func frameLen(reportID byte) int {
 
 // routeReport picks the interface that takes output reports with this ID:
 // the one whose OutLen is the report's frame length or, failing that, the
-// only interface there is (its OS does not tell OutLen, or one object
-// carries every report ID, as on macOS).
+// only interface there is when its OutLen is unknown (0: its OS does not
+// tell OutLen, or one object carries every report ID, as on macOS). A lone
+// interface with some other OutLen takes other reports, not this one.
 func routeReport(ifaces []Info, reportID byte) (int, error) {
-	if n := frameLen(reportID); n > 0 {
+	n := frameLen(reportID)
+	if n > 0 {
 		for i, in := range ifaces {
 			if in.OutLen == n {
 				return i, nil
 			}
 		}
 	}
-	if len(ifaces) == 1 {
+	if len(ifaces) == 1 && ifaces[0].OutLen == 0 {
 		return 0, nil
 	}
 	return 0, fmt.Errorf("hid: no interface takes report %#02x", reportID)

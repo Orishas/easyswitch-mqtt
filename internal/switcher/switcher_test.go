@@ -284,6 +284,37 @@ func TestSwitchDeviceStays(t *testing.T) {
 	}
 }
 
+// A device that answers the confirming ping with its own HID++ 2.0 error
+// is still connected: it gets setCurrentHost three times, then counts as an
+// error, not as "left".
+func TestSwitchDeviceStaysWithError(t *testing.T) {
+	fast(t)
+	slots := boltSlots()
+	delete(slots, 2)
+	rx := hidtest.NewReceiver(slots)
+	sent := 0
+	dev := &hooked{Receiver: rx}
+	dev.onWrite = func(f []byte) bool {
+		switch {
+		case f[1] == 1 && f[2] == keysChangeHost && f[3]>>4 == 1: // setCurrentHost: ignored
+			sent++
+			return false
+		case sent > 0 && f[1] == 1 && f[2] == 0x00 && f[3]>>4 == 1: // ping after it: HID++ 2.0 error
+			rx.Inject([]byte{0x11, 1, 0xFF, 0x00, f[3], 0x05, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
+			return false
+		}
+		return true
+	}
+	got, err := Switch(context.Background(), connect(t, dev), 2, testPatience)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertResults(t, got, []Result{{Name: "MX Keys S", Slot: 1, From: 1, Outcome: "error: device did not leave"}})
+	if sent != 3 {
+		t.Errorf("%d setCurrentHost requests sent, want 3", sent)
+	}
+}
+
 // Slots the receiver reports as unknown are not waited for: with the real
 // one-second request timeout, a round over four silent slots would take
 // four seconds.

@@ -39,6 +39,9 @@ jobs:
     env:
       CGO_ENABLED: "1"
       GOOS: darwin
+      # Go does not pass -mmacosx-version-min to the external (cgo) link, so
+      # without this the binary needs the runner SDK's macOS version.
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -54,6 +57,21 @@ jobs:
           GOARCH: amd64
       - name: Make the universal binary
         run: lipo -create -output easyswitch-macos easyswitch-arm64 easyswitch-amd64
+      # Fails unless both halves carry exactly one LC_BUILD_VERSION with
+      # minos 11.0; a missing vtool or an output without a minos line fails too.
+      - name: Check the minimum macOS version
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arch in arm64 x86_64; do
+            out=$(vtool -arch "$arch" -show-build easyswitch-macos)
+            echo "$out"
+            minos=$(printf '%s\n' "$out" | awk '$1 == "minos" { print $2 }')
+            if [ "$minos" != "11.0" ]; then
+              echo "::error::$arch half: minos is '${minos}', want 11.0"
+              exit 1
+            fi
+          done
       # --force: the linker already signs the arm64 half; codesign refuses
       # to sign a signed file again without it.
       - name: Sign ad hoc

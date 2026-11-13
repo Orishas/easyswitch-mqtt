@@ -231,11 +231,16 @@ The service measures every 15 seconds for five minutes after the computer
 starts, then stops by itself. Save what it measured to a file (a normal,
 not administrator, PowerShell or Terminal is fine).
 
-Windows:
+Windows (this copies the service's report file byte for byte; piping
+`diag --boot-report` into a file in Windows PowerShell can garble user or
+device names with accents or other non-English letters):
 
 ```powershell
-& "$env:USERPROFILE\easyswitch.exe" diag --boot-report | Out-File -Encoding utf8 "$env:USERPROFILE\easyswitch-boot-report.txt"
+Copy-Item "$env:ProgramData\easyswitch\boot-diag.txt" "$env:USERPROFILE\easyswitch-boot-report.txt"
 ```
+
+To just look at the report in the window, run
+`& "$env:USERPROFILE\easyswitch.exe" diag --boot-report`.
 
 macOS:
 
@@ -245,7 +250,8 @@ macOS:
 
 The report is now in `easyswitch-boot-report.txt` in your user folder. Each
 measurement in it says whether it ran "before login" or "logged in". If it
-says "No boot report yet", the computer has not restarted since the install.
+says "No boot report yet" (on Windows, if `Copy-Item` says it cannot find
+`boot-diag.txt`), the computer has not restarted since the install.
 
 Then remove the service. This also deletes the service's own copy of the
 report, so save it first as above.
@@ -292,7 +298,8 @@ It looks for devices for up to 8 seconds. Move the mouse or press a key if a
 device sleeps; a sleeping device cannot be switched until it wakes. Then it
 prints one line per device:
 
-- `left (was on channel 1)`: the device went to the new channel.
+- `left (was on channel 1)`: the device stopped answering on this computer
+  (it was on channel 1), which normally means it went to the new channel.
 - `already`: it was on that channel already.
 - `asleep`: it did not wake up in time and stayed where it was.
 - `error: ...`: something went wrong; the text says what.
@@ -309,6 +316,9 @@ From each computer:
 - the report of `diag --watch 2m --idle=`,
 - `easyswitch-boot-report.txt`,
 - the lines `switch` printed (copy them from the window),
+- whether Logi Options+ was running during the measurements, and whether it
+  kept working normally during and after them (mouse buttons, gestures, its
+  own device list),
 - which computer it was (Windows or Mac, and which channel it uses), and
   which mouse and keyboard you have.
 
